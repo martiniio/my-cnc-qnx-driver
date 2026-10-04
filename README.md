@@ -2,6 +2,8 @@
 
 A QNX resource manager that exposes a CNC lathe as two files, talking to the machine over OPC UA.
 
+This driver was built to work alongside the companion **timeseries** repository, which consumes the data it publishes. It targets x86_64 on QNX SDP 8.0.
+
 ## Overview
 
 The driver is a single QNX process. From the application side it is a resource manager; from the machine side it is an OPC UA client. Two paths are exposed:
@@ -14,13 +16,15 @@ The two OPC UA sessions are owned by separate threads inside the driver. One pol
 ## Requirements
 
 - QNX SDP 8.0
-- open62541 (see [Dependencies](#dependencies))
-- A QNX target or VM to run the driver
+- open62541, built from the amalgamation (see [Dependencies](#dependencies))
+- A QNX target or VM running x86_64 to run the driver
 - An OPC UA server exposing the machine, reachable over the network
 
 ## Dependencies
 
-The driver uses the open62541 single-file amalgamation. Download the latest 1.5.x release from:
+The driver uses the open62541 single-file **amalgamation** — two files, `open62541.c` and `open62541.h`, that contain the whole library. No separate build of open62541 is required, and no shared library is linked. The amalgamation is compiled together with the driver.
+
+Download the latest 1.5.x release from:
 
 - https://github.com/open62541/open62541/releases
 
@@ -41,13 +45,13 @@ The Makefile is the standard Momentics template. It expects the QNX build enviro
 make
 ```
 
-By default it builds for `x86_64` in debug mode. To build for another target or profile:
+By default it builds for `x86_64` in debug mode. To build in release mode:
 
 ```sh
-make PLATFORM=armv7le BUILD_PROFILE=release
+make BUILD_PROFILE=release
 ```
 
-The output binary is written to `build/<platform>-<profile>/MyDriver`.
+The output binary is written to `build/x86_64-<profile>/MyDriver`.
 
 To clean:
 
@@ -57,7 +61,7 @@ make clean
 
 ## Run
 
-On the QNX target:
+On the QNX x86_64 target:
 
 ```sh
 ./MyDriver -U 100:100 opc.tcp://192.168.1.50:4840/freeopcua/server/
@@ -133,6 +137,8 @@ src/
   opcua_cnc_map.h       the public interface: paths, structs, errno meanings
   opcua_client.h        internal interface between the two .c files
   cnc_log.h             timestamped log lines on stderr
+  open62541.c           open62541 amalgamation (downloaded separately, not committed)
+  open62541.h           open62541 amalgamation (downloaded separately, not committed)
 Makefile                standard Momentics build
 ```
 
@@ -155,10 +161,15 @@ Applications include this header and nothing else.
 - Commands are queued. The pool thread that receives a `write()` does not wait for the machine; it pushes the command and the writer's `rcvid` onto the queue and returns. The write thread runs the command and replies to the writer when the machine is done.
 - Two OPC UA sessions, each owned by exactly one thread. This avoids the open62541 thread-safety issue that would otherwise require serialising the periodic Read against every method call.
 - On shutdown, the driver stops accepting commands, drains the queue, and closes both sessions cleanly so the server sees normal disconnects.
+- The open62541 library is compiled from the amalgamation (`open62541.c`), so there is no dynamic dependency on a prebuilt shared library.
+
+## Companion project
+
+This driver was written to feed the **timeseries** repository, which reads `/dev/cnc/plant` periodically and stores the samples for later analysis. The driver itself has no knowledge of timeseries; the two communicate only through the interface described above.
 
 ## Status
 
-Built and tested against QNX SDP 8.0 on x86_64, with an OPC UA server on a Raspberry Pi 4.
+Built and tested against QNX SDP 8.0 on **x86_64**, with an OPC UA server on a Raspberry Pi 4.
 
 ## License
 
