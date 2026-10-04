@@ -1,175 +1,184 @@
 # QNX CNC Driver
 
-A QNX resource manager that exposes a CNC lathe as two files, talking to the machine over OPC UA.
-
-This driver was built to work alongside the companion **timeseries** repository, which consumes the data it publishes. It targets x86_64 on QNX SDP 8.0.
+A QNX resource manager that exposes a CNC lathe as two files, talking to the machine over OPC UA. Built to work alongside the companion **timeseries** repository.
 
 ## Overview
 
 The driver is a single QNX process. From the application side it is a resource manager; from the machine side it is an OPC UA client. Two paths are exposed:
 
-- **`/dev/cnc/plant`** — reading returns the latest machine state as one `cnc_plant_t` struct: spindle, feed, tool, vibration, production, auxiliary systems, and machine information. Values come from a single reading on the machine, so they are consistent with each other. Reads are answered instantly from a cached snapshot; the driver polls the machine in the background.
-- **`/dev/cnc/methods`** — writing one `cnc_cmd_t` runs a method on the machine: `EmergencyStop`, `ResetProductionCounters`, or `ChangeTool`. The call blocks until the machine answers, or fails with an `errno`.
+- **`/dev/cnc/plant`** — reads return the latest machine state as one struct: spindle, feed, tool, vibration, production, auxiliary systems, and machine information.
+- **`/dev/cnc/methods`** — writes run a method: `EmergencyStop`, `ResetProductionCounters`, or `ChangeTool`. Blocks until the machine answers.
 
-The two OPC UA sessions are owned by separate threads inside the driver. One polls the machine on a fixed cadence, one runs commands as they arrive. Pool threads that serve applications never wait on the network.
+Reads are answered from a cached snapshot. Commands are queued and executed by a separate thread. Pool threads that serve applications never wait on the network.
+
+## The machine
+
+Developed against a **simulated** CNC lathe. The simulation exposes the same OPC UA node tree as the real machine, so the driver can be developed without tying up the lathe. Swapping to the real machine is a one-line change to the OPC UA URL.
+
+```mermaid
+flowchart LR
+    APP["application / timeseries"]
+    DRV["QNX driver<br/>resource manager + OPC UA client"]
+    MACH["CNC lathe<br/>(OPC UA endpoint)"]
+
+    APP -- "/dev/cnc/plant<br/>/dev/cnc/methods" --> DRV
+    DRV -- "OPC UA over TCP" --> MACH
+
+    classDef ext fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    classDef mid fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    classDef sim fill:#FEF3C7,stroke:#B45309,color:#78350F
+    class APP ext
+    class DRV mid
+    class MACH sim
+```
+
+<figure>
+  <img src="images/image.png" alt="CNC lathe" width="360">
+  <figcaption>The machine (simulated OPC UA endpoint).</figcaption>
+</figure>
+Amber = the simulated machine. Teal = the driver. Purple = the application.
+
+## About OPC UA
+
+[OPC UA](https://opcfoundation.org/about/opc-technologies/opc-ua/) is an open, vendor-neutral standard for industrial communication. It models data as a tree of typed nodes and works over TCP.
+
+The driver uses [open62541](https://www.open62541.org/), an open-source (MPL-2.0) C implementation shipped as a single-file amalgamation (`open62541.c` + `open62541.h`). No separate build of the library is required.
+
+Two OPC UA services are used:
+
+- **TranslateBrowsePathsToNodeIds** — resolves browse paths to NodeIds once at connection.
+- **Read** and **Call** — used at runtime. Reads are batched; all 33 nodes come back in one round trip.
 
 ## Requirements
 
 - QNX SDP 8.0
-- open62541, built from the amalgamation (see [Dependencies](#dependencies))
-- A QNX target or VM running x86_64 to run the driver
+- open62541 (see [Dependencies](#dependencies))
+- A QNX x86_64 target or VM
 - An OPC UA server exposing the machine, reachable over the network
 
 ## Dependencies
 
-The driver uses the open62541 single-file **amalgamation** — two files, `open62541.c` and `open62541.h`, that contain the whole library. No separate build of open62541 is required, and no shared library is linked. The amalgamation is compiled together with the driver.
+The driver needs the open62541 single-file amalgamation — two files, `open62541.c` and `open62541.h` — placed in `src/`. No separate build of the library is required, and no shared library is linked.
 
-Download the latest 1.5.x release from:
+Tested with open62541 **v1.5.8**.
+
+### Getting the amalgamation
+
+**Prebuilt.** Some releases publish the amalgamation directly on the release page:
 
 - https://github.com/open62541/open62541/releases
 
-You need two files:
+Look for a file named `open62541-v<version>-amalgamation.tar.gz` or similar. Extract and copy `open62541.c` and `open62541.h` into `src/`.
 
-- `open62541.c`
-- `open62541.h`
+**From source.** If no prebuilt amalgamation exists for the version you want:
 
-Place both files in `src/`. The Makefile picks them up automatically along with the driver source.
+```sh
+git clone --recurse-submodules https://github.com/open62541/open62541.git
+cd open62541
+git checkout v1.5.8
+mkdir build && cd build
+cmake -DUA_ENABLE_AMALGAMATION=ON \
+      -DUA_BUILD_EXAMPLES=OFF \
+      -DUA_BUILD_UNIT_TESTS=OFF \
+      -DUA_ENABLE_ENCRYPTION=OFF \
+      ..
+make open62541-amalgamation
+```
+
+The two files land in the build directory. Copy them into `src/`.
 
 open62541 is licensed under MPL 2.0. See the project page for details.
 
 ## Build
 
-The Makefile is the standard Momentics template. It expects the QNX build environment to be set up (`QNX_TARGET` and `QNX_HOST` exported).
-
 ```sh
 make
 ```
 
-By default it builds for `x86_64` in debug mode. To build in release mode:
+Produces two binaries:
+
+- `build/x86_64-<profile>/MyDriver` — the resource manager
+- `build/x86_64-<profile>/cnc_read` — the interactive tool
+
+For release:
 
 ```sh
 make BUILD_PROFILE=release
 ```
 
-The output binary is written to `build/x86_64-<profile>/MyDriver`.
-
-To clean:
-
-```sh
-make clean
-```
-
 ## Run
 
-On the QNX x86_64 target:
+On the QNX target:
 
 ```sh
 ./MyDriver -U 100:100 opc.tcp://192.168.1.50:4840/freeopcua/server/
 ```
 
-`-U uid:gid` drops root after the driver has registered its paths under `/dev`. The URL is the OPC UA endpoint of the machine.
+`-U uid:gid` drops root after the driver has registered its paths under `/dev`. Stop it with `slay MyDriver`.
 
-The driver logs to stderr:
+## Using the tool
+
+`cnc_read` exercises both paths using only POSIX calls:
 
 ```
-2026-10-04 21:13:09.482 INFO  serving /dev/cnc/plant and /dev/cnc/methods
-2026-10-04 21:13:09.994 INFO  read session up (opc.tcp://192.168.1.50:4840/freeopcua/server/)
+./cnc_read          live view with command keys
+./cnc_read -1       one-shot snapshot
+./cnc_read -b N     benchmark N reads (min/avg/p99/max)
 ```
 
-The write session is created on the first command.
+Live view keys: `e` (estop), `r` (reset), `1`–`9` (change tool), `q` (quit).
 
-To stop it cleanly:
+After a command the status line shows the round-trip time — pool thread receiving, queue, OPC UA `Call`, machine executing, reply.
 
-```sh
-slay MyDriver
-```
-
-The driver drains the command queue, closes both OPC UA sessions, and exits.
-
-## Usage
-
-### Reading the machine
-
-```c
-#include "opcua_cnc_map.h"
-
-cnc_plant_t p;
-int fd = open(CNC_PATH_PLANT, O_RDONLY);
-pread(fd, &p, sizeof p, 0);
-printf("%.0f rpm, tool %d\n", p.spindle.speed_rpm, (int)p.tool.number);
-```
-
-A plain `read()` at offset 0 returns the snapshot and moves the file position past it. A second `read()` returns 0 (end of file). To poll, keep the file open and use `pread()` at offset 0 — it always returns the latest snapshot without moving the file position.
-
-If the link to the machine is down, the driver keeps the last known values and clears the `connected` flag in `p.hdr.connected`. The application can still read them, but should check that flag.
-
-### Sending a command
-
-```c
-cnc_cmd_t cmd = { CNC_CHANGE_TOOL, 4 };
-int fd = open(CNC_PATH_METHODS, O_WRONLY);
-if (write(fd, &cmd, sizeof cmd) != sizeof cmd)
-    perror("ChangeTool");
-```
-
-`write()` blocks until the machine has executed the method, then returns `sizeof(cnc_cmd_t)`. On failure it returns `-1` and sets `errno`.
-
-### Errors
-
-| `errno` | meaning |
-|---|---|
-| `EBUSY` | the command queue is full; retry later |
-| `EIO` | no link to the machine |
-| `ETIMEDOUT` | the machine did not answer in time |
-| `EACCES` | the machine refused the method |
-| `EINVAL` | malformed command |
-| `EINTR` | the caller was interrupted while waiting (see below) |
-| `ECANCELED` | the driver is shutting down |
-
-`EINTR` means the caller was interrupted by a signal while blocked in `write()`. The driver cannot tell whether the machine has already started executing the method. For idempotent methods (`EmergencyStop`, `ResetProductionCounters`) retrying is safe. For `ChangeTool`, an application that cares should re-read `/dev/cnc/plant` and check `tool.number` before deciding.
+![cnc_read live view](docs/cnc-read.png)
 
 ## Repository layout
 
 ```
 src/
-  MyDriver.c            the resource manager: paths, handlers, queue, threads, shutdown
-  opcua_client.c        the OPC UA client: two sessions, snapshot, method calls
-  opcua_cnc_map.h       the public interface: paths, structs, errno meanings
+  MyDriver.c            resource manager: paths, handlers, queue, threads, shutdown
+  opcua_client.c        OPC UA client: two sessions, snapshot, method calls
+  opcua_cnc_map.h       public interface
   opcua_client.h        internal interface between the two .c files
-  cnc_log.h             timestamped log lines on stderr
-  open62541.c           open62541 amalgamation (downloaded separately, not committed)
-  open62541.h           open62541 amalgamation (downloaded separately, not committed)
-Makefile                standard Momentics build
+  cnc_log.h             timestamped log lines
+  cnc_read.c            interactive tool
+  open62541.c/.h        open62541 amalgamation (not committed)
+Makefile                builds MyDriver and cnc_read
 ```
 
 ## Interface
 
-`opcua_cnc_map.h` is the full contract. It declares:
+`opcua_cnc_map.h` is the full contract: the two paths, the `cnc_plant_t` and `cnc_cmd_t` structs, the method and state enums, and the `errno` values `read()` and `write()` can return. Applications include this header and nothing else.
 
-- the two paths (`CNC_PATH_PLANT`, `CNC_PATH_METHODS`)
-- `cnc_plant_t` — what a read on `/dev/cnc/plant` returns
-- `cnc_cmd_t` — what a write on `/dev/cnc/methods` takes
-- the method enum (`cnc_method_t`)
-- the machine state and tool state enums
-- the `errno` values that `read()` and `write()` can return
+## Errors
 
-Applications include this header and nothing else.
+| `errno` | meaning |
+|---|---|
+| `EBUSY` | queue full; retry later |
+| `EIO` | no link to the machine |
+| `ETIMEDOUT` | machine did not answer in time |
+| `EACCES` | machine refused the method |
+| `EINVAL` | malformed command |
+| `EINTR` | caller interrupted while waiting |
+| `ECANCELED` | driver is shutting down |
+
+`EINTR` means the caller was interrupted while blocked in `write()`. The machine may or may not have started the method. Idempotent methods (`EmergencyStop`, `ResetProductionCounters`) are safe to retry. For `ChangeTool`, re-read the plant and check `tool.number` before deciding.
 
 ## Design notes
 
-- The driver polls the machine over OPC UA on a fixed cadence (default 500 ms) and stores the result in a snapshot. Reads are answered from the snapshot, not from the network.
-- Commands are queued. The pool thread that receives a `write()` does not wait for the machine; it pushes the command and the writer's `rcvid` onto the queue and returns. The write thread runs the command and replies to the writer when the machine is done.
-- Two OPC UA sessions, each owned by exactly one thread. This avoids the open62541 thread-safety issue that would otherwise require serialising the periodic Read against every method call.
-- On shutdown, the driver stops accepting commands, drains the queue, and closes both sessions cleanly so the server sees normal disconnects.
-- The open62541 library is compiled from the amalgamation (`open62541.c`), so there is no dynamic dependency on a prebuilt shared library.
+- Polls the machine on a fixed cadence (500 ms) and stores the result in a snapshot. Reads are answered from memory.
+- Commands are queued. The pool thread that receives a `write()` returns immediately; a separate thread runs the command and replies when the machine is done.
+- Two OPC UA sessions, one per thread. Avoids the open62541 thread-safety issue.
+- On shutdown: stop accepting commands, drain the queue, close both sessions cleanly.
+- open62541 is compiled from the amalgamation — no dynamic library dependency.
 
 ## Companion project
 
-This driver was written to feed the **timeseries** repository, which reads `/dev/cnc/plant` periodically and stores the samples for later analysis. The driver itself has no knowledge of timeseries; the two communicate only through the interface described above.
+Feeds the **timeseries** repository, which polls `/dev/cnc/plant` and stores samples. The driver has no knowledge of timeseries; the two only meet through the interface above.
 
 ## Status
 
-Built and tested against QNX SDP 8.0 on **x86_64**, with an OPC UA server on a Raspberry Pi 4.
+Built and tested against QNX SDP 8.0 on x86_64, open62541 v1.5.8, OPC UA server on a Raspberry Pi Zero 2 W.
 
 ## License
 
