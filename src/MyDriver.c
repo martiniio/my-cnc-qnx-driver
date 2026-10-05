@@ -44,7 +44,7 @@ struct cnc_attr;
 #define ROOT        "DMG MORI CTX 650 CNC Lathe"
 #define NS_URI      "http://manufacturing.example.com/cnc"
 #define PERIOD_MS   500
-#define TIMEOUT_MS  3000
+#define TIMEOUT_MS  2000
 #define GET_PRIO    10          /* reading the plant              */
 #define CMD_PRIO    12          /* running commands: above reads  */
 
@@ -393,7 +393,9 @@ int main(int argc, char **argv)
     opcua_cfg_t cfg = { argv[optind], NS_URI, ROOT, PERIOD_MS, TIMEOUT_MS, GET_PRIO };
     sem_init(&q_items, 0, 0);
     if (opcua_client_start(&cfg) != EOK ||
+        /// \callgraph write_worker
         pthread_create(&write_worker_TID, NULL, write_worker, NULL) != EOK ||
+        /// \callgraph signal_thread
         pthread_create(&signal_TID, NULL, signal_thread, &sigs) != EOK) {
         fprintf(stderr, "cannot start threads\n");
         return EXIT_FAILURE;

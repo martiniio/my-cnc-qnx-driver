@@ -31,12 +31,14 @@ flowchart LR
     class DRV mid
     class MACH sim
 ```
-
+(Amber = the simulated machine. Teal = the driver. Purple = the application.)
 <figure>
   <img src="images/image.png" alt="CNC lathe" width="360">
   <figcaption>The machine (simulated OPC UA endpoint).</figcaption>
 </figure>
-Amber = the simulated machine. Teal = the driver. Purple = the application.
+
+What a real CNC lathe looks like. Photo: "Machinist inspecting a CNC lathe" by Somesomething243, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Cnc_lathe.png), licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
 
 ## About OPC UA
 
@@ -178,7 +180,7 @@ Feeds the **timeseries** repository, which polls `/dev/cnc/plant` and stores sam
 
 ## Status
 
-Built and tested against QNX SDP 8.0 on x86_64, open62541 v1.5.8, OPC UA server on a Raspberry Pi Zero 2 W.
+Built and tested against QNX SDP 8.0 on x86_64, open62541 v1.5.8, OPC UA server on a Raspberry Pi Zpacman -S ero 2 W.
 
 ## License
 
